@@ -1,32 +1,104 @@
 from playwright.sync_api import sync_playwright
+import time
 
 
 SESSION_DIR = "whatsapp_session"
+WHATSAPP_URL = "https://web.whatsapp.com"
 
 
-def open_whatsapp():
-    with sync_playwright() as p:
+class WhatsAppBot:
 
-        browser = p.chromium.launch_persistent_context(
+    def __init__(self):
+        self.playwright = None
+        self.browser = None
+        self.page = None
+
+    def start(self):
+        self.playwright = sync_playwright().start()
+
+        self.browser = self.playwright.chromium.launch_persistent_context(
             user_data_dir=SESSION_DIR,
             headless=False,
-            viewport={"width": 1400, "height": 900}
+            viewport={
+                "width": 1400,
+                "height": 900
+            }
         )
 
-        page = browser.pages[0] if browser.pages else browser.new_page()
+        if self.browser.pages:
+            self.page = self.browser.pages[0]
+        else:
+            self.page = self.browser.new_page()
 
-        page.goto("https://web.whatsapp.com")
+        self.page.goto(WHATSAPP_URL)
 
-        print("\nWhatsApp Web opened.")
+    def is_logged_in(self):
+        """
+        Check whether WhatsApp Web has finished loading
+        the logged-in chat interface.
+        """
+
+        try:
+            # WhatsApp's main chat area contains this navigation
+            # element when the account is logged in.
+            self.page.locator("#pane-side").wait_for(
+                state="visible",
+                timeout=5000
+            )
+
+            return True
+
+        except Exception:
+            return False
+
+    def wait_for_login(self):
+        print()
+        print("=" * 60)
+        print("WAITING FOR WHATSAPP LOGIN")
+        print("=" * 60)
+        print()
         print("If you see a QR code, scan it with your phone.")
-        print("After WhatsApp loads, press ENTER here.")
+        print("The program will continue automatically after login.")
+        print()
 
-        input()
+        while True:
 
-        print("Session saved.")
+            if self.is_logged_in():
+                print("✅ WhatsApp login detected.")
+                return True
 
-        browser.close()
+            time.sleep(2)
+
+    def close(self):
+        if self.browser:
+            self.browser.close()
+
+        if self.playwright:
+            self.playwright.stop()
 
 
 if __name__ == "__main__":
-    open_whatsapp()
+
+    bot = WhatsAppBot()
+
+    try:
+        bot.start()
+
+        print("WhatsApp Web opened.")
+
+        bot.wait_for_login()
+
+        print()
+        print("WhatsApp is ready.")
+        print("Nothing will be sent yet.")
+        print()
+        print("Press Ctrl+C to close.")
+
+        while True:
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        print("\nClosing...")
+
+    finally:
+        bot.close()
