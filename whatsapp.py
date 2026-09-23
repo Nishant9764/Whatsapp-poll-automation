@@ -134,7 +134,7 @@ if __name__ == "__main__":
         # CHANGE THIS TO YOUR ACTUAL WHATSAPP GROUP NAME
         # --------------------------------------------------
 
-        GROUP_NAME = "Youth Boys Community - ISKCON NRJD"
+        GROUP_NAME = "group_name"
 
         bot.find_group(GROUP_NAME)
 
