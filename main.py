@@ -5,6 +5,7 @@ import time
 from parser import parse_questions
 from state import get_next_question, mark_question_sent
 from whatsapp import WhatsAppBot
+from scheduler import wait_until_next_run
 
 
 CONFIG_FILE = "config.json"
@@ -91,7 +92,7 @@ def run_once():
         bot.open_group(group_name)
 
         # -----------------------------------------------------
-        # 8. Verify that correct group is open
+        # 8. Verify correct group
         # -----------------------------------------------------
         bot.verify_group(group_name)
 
@@ -109,8 +110,7 @@ def run_once():
         bot.send_poll()
 
         # -----------------------------------------------------
-        # 11. IMPORTANT:
-        #     Only mark as sent AFTER successful send
+        # 11. Mark question as sent ONLY after successful send
         # -----------------------------------------------------
         mark_question_sent()
 
@@ -137,18 +137,68 @@ def run_once():
 
 
 def main():
+    config = load_config()
+
+    send_hour = config["send_hour"]
+    send_minute = config["send_minute"]
+
     # ---------------------------------------------------------
     # --once
-    # Run exactly one poll and exit.
     #
-    # Normal mode will be added below for daily scheduling.
+    # Runs exactly one poll immediately and exits.
     # ---------------------------------------------------------
     if "--once" in sys.argv:
         run_once()
         return
 
-    print("\nDaily scheduler mode.")
-    print("Scheduler integration coming next.")
+    # ---------------------------------------------------------
+    # Daily scheduler mode
+    # ---------------------------------------------------------
+    print("\n" + "=" * 60)
+    print("WHATSAPP DAILY POLL BOT")
+    print("=" * 60)
+
+    print(
+        f"\nDaily schedule: "
+        f"{send_hour:02d}:{send_minute:02d}"
+    )
+
+    print("Scheduler is running...")
+    print("Press Ctrl+C to stop the bot.")
+
+    while True:
+        try:
+            # -------------------------------------------------
+            # Wait until the next scheduled time
+            # -------------------------------------------------
+            wait_until_next_run(
+                send_hour,
+                send_minute
+            )
+
+            # -------------------------------------------------
+            # Execute one complete poll cycle
+            # -------------------------------------------------
+            run_once()
+
+        except KeyboardInterrupt:
+            print("\n\nBot stopped by user.")
+            break
+
+        except Exception as error:
+            print("\n" + "=" * 60)
+            print("❌ DAILY RUN FAILED")
+            print("=" * 60)
+
+            print(f"\nError: {error}")
+
+            print(
+                "\nThe question was not marked as sent."
+                "\nThe bot will continue waiting for the next scheduled run."
+            )
+
+            # Give the process a short recovery period
+            time.sleep(30)
 
 
 if __name__ == "__main__":
