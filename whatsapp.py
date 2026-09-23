@@ -155,3 +155,83 @@ if __name__ == "__main__":
 
     finally:
         bot.close()
+
+def create_poll(self, question, options):
+    """
+    Open the native WhatsApp Poll UI and fill in the question/options.
+    Does NOT click Send.
+    """
+
+    print("\nCreating poll...")
+    print(f"Question: {question}")
+    print(f"Options: {len(options)}")
+
+    # Click the + / attachment button
+    attach_button = self.page.locator(
+        'button[aria-label*="Attach"], '
+        'button[aria-label*="attachment"]'
+    ).first
+
+    attach_button.wait_for(
+        state="visible",
+        timeout=10000
+    )
+
+    attach_button.click()
+
+    time.sleep(1)
+
+    # Click Poll from the attachment menu
+    poll_button = self.page.get_by_text(
+        "Poll",
+        exact=True
+    ).last
+
+    poll_button.wait_for(
+        state="visible",
+        timeout=5000
+    )
+
+    poll_button.click()
+
+    time.sleep(1)
+
+    print("Poll dialog opened.")
+
+    # Find the poll question input
+    question_input = self.page.locator(
+        'div[contenteditable="true"]'
+    ).filter(
+        has=self.page.locator(
+            '[data-lexical-text="true"]'
+        )
+    ).first
+
+    # If the above selector doesn't work on the current UI,
+    # we'll inspect the actual dialog and adjust it.
+    question_input.wait_for(
+        state="visible",
+        timeout=5000
+    )
+
+    question_input.fill(question)
+
+    # Find poll option inputs.
+    # WhatsApp initially provides two options.
+    option_inputs = self.page.locator(
+        'div[contenteditable="true"]'
+    )
+
+    visible_inputs = []
+
+    for i in range(option_inputs.count()):
+        element = option_inputs.nth(i)
+
+        if element.is_visible():
+            visible_inputs.append(element)
+
+    print(f"Visible editable fields: {len(visible_inputs)}")
+
+    # The exact UI selectors can vary between WhatsApp versions.
+    # We'll inspect before attempting to fill options.
+    print("Poll UI detected.")
