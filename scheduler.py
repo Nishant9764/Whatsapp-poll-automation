@@ -1,42 +1,52 @@
 import time
-from datetime import datetime
-
-from state import get_next_question, mark_question_sent
-from parser import parse_questions
+from datetime import datetime, timedelta
 
 
-QUESTIONS_FILE = "questions.txt"
+def get_next_run_time(hour, minute):
+    now = datetime.now()
 
-
-def wait_until(hour, minute):
-
-    print(
-        f"Waiting until {hour:02d}:{minute:02d}..."
+    target = now.replace(
+        hour=hour,
+        minute=minute,
+        second=0,
+        microsecond=0
     )
 
-    while True:
+    # If today's scheduled time has already passed,
+    # schedule for tomorrow.
+    if target <= now:
+        target += timedelta(days=1)
 
+    return target
+
+
+def wait_until_next_run(hour, minute):
+    target = get_next_run_time(hour, minute)
+
+    print("\n" + "=" * 60)
+    print("DAILY SCHEDULER")
+    print("=" * 60)
+
+    print(f"Next poll: {target.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    while True:
         now = datetime.now()
 
-        if now.hour == hour and now.minute == minute:
+        remaining = (target - now).total_seconds()
+
+        if remaining <= 0:
+            print("\n⏰ Scheduled time reached.")
             return
 
-        time.sleep(20)
+        # Don't spam the terminal every second.
+        # Show an update approximately every minute.
+        if remaining > 60:
+            print(
+                f"Waiting... "
+                f"{int(remaining // 60)} minutes remaining."
+            )
 
+            time.sleep(60)
 
-def get_question_for_today():
-
-    questions = parse_questions(QUESTIONS_FILE)
-
-    if not questions:
-        raise RuntimeError(
-            "No questions found."
-        )
-
-    question = get_next_question(questions)
-
-    if question is None:
-        print("All questions have been completed.")
-        return None
-
-    return question
+        else:
+            time.sleep(min(remaining, 5))

@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 
 
 STATE_FILE = "state.json"
@@ -8,7 +9,8 @@ STATE_FILE = "state.json"
 def load_state():
     if not os.path.exists(STATE_FILE):
         return {
-            "next_question_index": 0
+            "next_question_index": 0,
+            "last_sent_at": None
         }
 
     with open(STATE_FILE, "r", encoding="utf-8") as file:
@@ -36,6 +38,10 @@ def mark_question_sent():
 
     state["next_question_index"] = (
         state.get("next_question_index", 0) + 1
+    )
+
+    state["last_sent_at"] = datetime.now().isoformat(
+        timespec="seconds"
     )
 
     save_state(state)
