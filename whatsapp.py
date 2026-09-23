@@ -33,41 +33,85 @@ class WhatsAppBot:
         self.page.goto(WHATSAPP_URL)
 
     def is_logged_in(self):
-        """
-        Check whether WhatsApp Web has finished loading
-        the logged-in chat interface.
-        """
-
         try:
-            # WhatsApp's main chat area contains this navigation
-            # element when the account is logged in.
             self.page.locator("#pane-side").wait_for(
                 state="visible",
                 timeout=5000
             )
-
             return True
-
         except Exception:
             return False
 
     def wait_for_login(self):
-        print()
-        print("=" * 60)
-        print("WAITING FOR WHATSAPP LOGIN")
-        print("=" * 60)
-        print()
-        print("If you see a QR code, scan it with your phone.")
-        print("The program will continue automatically after login.")
-        print()
+        print("\nWaiting for WhatsApp login...")
 
         while True:
-
             if self.is_logged_in():
                 print("✅ WhatsApp login detected.")
-                return True
+                return
 
             time.sleep(2)
+
+    def find_group(self, group_name):
+        """
+        Search for a WhatsApp group by name.
+        Does NOT send anything.
+        """
+
+        print(f"\nSearching for group: {group_name}")
+
+        # WhatsApp Web search box
+        search_box = self.page.locator(
+            'div[contenteditable="true"][data-tab="3"]'
+        ).first
+
+        search_box.wait_for(
+            state="visible",
+            timeout=10000
+        )
+
+        search_box.click()
+
+        # Clear existing text
+        search_box.press("ControlOrMeta+A")
+        search_box.press("Backspace")
+
+        search_box.fill(group_name)
+
+        # Give WhatsApp time to display results
+        time.sleep(3)
+
+        print("Search results loaded.")
+
+        # Show visible text for debugging
+        print("\nVisible search area:")
+        print(self.page.locator("#pane-side").inner_text())
+
+    def open_group(self, group_name):
+        """
+        Find and click the requested group.
+        """
+
+        print(f"\nLooking for exact group: {group_name}")
+
+        # Search result containing the group name.
+        result = self.page.locator(
+            "#pane-side"
+        ).get_by_text(
+            group_name,
+            exact=True
+        ).first
+
+        result.wait_for(
+            state="visible",
+            timeout=10000
+        )
+
+        result.click()
+
+        time.sleep(2)
+
+        print(f"✅ Opened group: {group_name}")
 
     def close(self):
         if self.browser:
@@ -84,18 +128,27 @@ if __name__ == "__main__":
     try:
         bot.start()
 
-        print("WhatsApp Web opened.")
-
         bot.wait_for_login()
 
-        print()
-        print("WhatsApp is ready.")
-        print("Nothing will be sent yet.")
-        print()
-        print("Press Ctrl+C to close.")
+        # --------------------------------------------------
+        # CHANGE THIS TO YOUR ACTUAL WHATSAPP GROUP NAME
+        # --------------------------------------------------
 
-        while True:
-            time.sleep(1)
+        GROUP_NAME = "Youth Boys Community - ISKCON NRJD"
+
+        bot.find_group(GROUP_NAME)
+
+        input(
+            "\nCheck the Chromium window. "
+            "Press ENTER when you're ready to continue..."
+        )
+
+        bot.open_group(GROUP_NAME)
+
+        input(
+            "\nGroup opened successfully. "
+            "Press ENTER to close..."
+        )
 
     except KeyboardInterrupt:
         print("\nClosing...")
