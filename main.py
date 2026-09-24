@@ -1,204 +1,209 @@
+"""
+main.py
+-------
+Orchestrates one full daily quiz cycle:
+
+    load config + questions + state
+      -> if already completed: report and stop (no auto-restart)
+      -> pick next unsent question, and the last SUCCESSFULLY sent
+         question/answer for the recap line
+      -> build the fixed intro message
+      -> open WhatsApp, verify the target group
+      -> send intro message, then build + send the native poll
+      -> ONLY on full success: advance state.json
+
+Any exception raised before the poll is confirmed sent aborts the run
+without touching state.json, so the same question is retried on the
+next scheduled run (see state.py and README "Failure safety").
+
+Usage:
+    python3 main.py            # normal mode: waits for the daily time, loops forever
+    python3 main.py --once     # run exactly one quiz cycle now, then exit
+"""
+
+from __future__ import annotations
+
+import argparse
 import json
+import os
 import sys
-import time
+import traceback
 
-from parser import parse_questions
-from state import get_next_question, mark_question_sent
+from parser import parse_questions, QuestionParseError
+from state import load_state, mark_sent
 from whatsapp import WhatsAppBot
-from scheduler import wait_until_next_run
+import scheduler
 
 
-CONFIG_FILE = "config.json"
-QUESTIONS_FILE = "questions.txt"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+QUESTIONS_PATH = os.path.join(BASE_DIR, "questions.txt")
+STATE_PATH = os.path.join(BASE_DIR, "state.json")
+
+MESSAGE_TEMPLATE_WITH_RECAP = (
+    "Hare Krishna 🙏\n\n"
+    "Today's quiz 👇\n\n"
+    "{question}\n\n"
+    "(Yesterday's question - Answer: {answer})"
+)
+
+MESSAGE_TEMPLATE_FIRST_RUN = (
+    "Hare Krishna 🙏\n\n"
+    "Today's quiz 👇\n\n"
+    "{question}"
+)
 
 
-def load_config():
-    with open(CONFIG_FILE, "r", encoding="utf-8") as file:
-        return json.load(file)
+def load_config(path: str) -> dict:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"config.json not found at {path}.")
+    with open(path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    for key in ("group_name", "send_hour", "send_minute"):
+        if key not in config:
+            raise ValueError(f"config.json is missing required key: '{key}'")
+    if not config["group_name"] or not config["group_name"].strip():
+        raise ValueError("config.json 'group_name' is empty.")
+
+    return config
 
 
-def run_once():
-    print("\n" + "=" * 60)
-    print("WHATSAPP DAILY POLL BOT")
-    print("=" * 60)
+def build_intro_message(question: str, last_question: str | None, last_answer: str | None) -> str:
+    """
+    Build today's fixed intro message. The "yesterday's answer" recap
+    line is included only when we actually have a previously
+    SUCCESSFULLY sent question (i.e. not on the very first run).
+    """
+    if last_question is None or last_answer is None:
+        return MESSAGE_TEMPLATE_FIRST_RUN.format(question=question)
+    return MESSAGE_TEMPLATE_WITH_RECAP.format(question=question, answer=last_answer)
 
-    # ---------------------------------------------------------
-    # 1. Load configuration
-    # ---------------------------------------------------------
-    config = load_config()
 
-    group_name = config["group_name"]
-
-    if not group_name or group_name == "YOUR GROUP NAME":
-        raise RuntimeError(
-            "Please set your actual WhatsApp group name in config.json."
-        )
-
-    print(f"\nTarget group: {group_name}")
-
-    # ---------------------------------------------------------
-    # 2. Parse questions
-    # ---------------------------------------------------------
-    print("\nLoading questions...")
-
-    questions = parse_questions(QUESTIONS_FILE)
-
-    if not questions:
-        raise RuntimeError("No questions found in questions.txt.")
-
-    print(f"Loaded {len(questions)} questions.")
-
-    # ---------------------------------------------------------
-    # 3. Get next unsent question
-    # ---------------------------------------------------------
-    question = get_next_question(questions)
-
-    if question is None:
-        print("\n🎉 All questions have already been sent.")
-        return
-
-    print("\n" + "-" * 60)
-    print("NEXT QUESTION")
-    print("-" * 60)
-
-    print(f"Question: {question['question']}")
-
-    for index, option in enumerate(question["options"], start=1):
-        print(f"{index}. {option}")
-
-    # ---------------------------------------------------------
-    # 4. Start WhatsApp
-    # ---------------------------------------------------------
-    bot = WhatsAppBot()
+def run_once() -> int:
+    """
+    Run exactly one quiz cycle. Returns a process exit code:
+    0 on success (or on a clean "all questions completed" stop),
+    1 on any failure (nothing was advanced; safe to retry).
+    """
+    try:
+        config = load_config(CONFIG_PATH)
+    except Exception as e:
+        print(f"[CONFIG ERROR] {e}")
+        return 1
 
     try:
-        print("\nStarting WhatsApp...")
+        questions = parse_questions(QUESTIONS_PATH)
+    except QuestionParseError as e:
+        print(f"[QUESTIONS ERROR] {e}")
+        return 1
 
+    try:
+        state = load_state(STATE_PATH)
+    except Exception as e:
+        print(f"[STATE ERROR] {e}")
+        return 1
+
+    total = len(questions)
+
+    if state.completed or state.next_question_index >= total:
+        print("All questions have been completed.")
+        return 0
+
+    today_q = questions[state.next_question_index]
+    question_text = today_q["question"]
+    correct_answer = today_q["answer"]
+    options = today_q["options"]
+
+    intro_message = build_intro_message(question_text, state.last_question, state.last_answer)
+
+    print("\n" + "=" * 60)
+    print(f"QUIZ CYCLE -- question {state.next_question_index + 1} of {total}")
+    print("=" * 60)
+    print(intro_message)
+    print("-" * 60)
+
+    bot = WhatsAppBot()
+    try:
         bot.start()
-
-        # -----------------------------------------------------
-        # 5. Wait for WhatsApp login
-        # -----------------------------------------------------
         bot.wait_for_login()
 
-        # -----------------------------------------------------
-        # 6. Find target group
-        # -----------------------------------------------------
-        bot.find_group(group_name)
+        bot.find_group(config["group_name"])
+        bot.open_group(config["group_name"])
+        bot.verify_group(config["group_name"])
 
-        # -----------------------------------------------------
-        # 7. Open exact group
-        # -----------------------------------------------------
-        bot.open_group(group_name)
-
-        # -----------------------------------------------------
-        # 8. Verify correct group
-        # -----------------------------------------------------
-        bot.verify_group(group_name)
-
-        # -----------------------------------------------------
-        # 9. Create poll
-        # -----------------------------------------------------
-        bot.create_poll(
-            question=question["question"],
-            options=question["options"]
-        )
-
-        # -----------------------------------------------------
-        # 10. Send poll
-        # -----------------------------------------------------
+        # Order matters: intro message first, native poll second.
+        bot.send_message(intro_message)
+        bot.create_poll(question_text, options)
         bot.send_poll()
 
-        # -----------------------------------------------------
-        # 11. Mark question as sent ONLY after successful send
-        # -----------------------------------------------------
-        mark_question_sent()
-
-        print("\n" + "=" * 60)
-        print("✅ DAILY POLL COMPLETED")
-        print("=" * 60)
-
-    except Exception as error:
-        print("\n" + "=" * 60)
-        print("❌ POLL FAILED")
-        print("=" * 60)
-
-        print(f"\nError: {error}")
-
-        print(
-            "\nThe question was NOT marked as sent."
-            "\nIt will remain available for the next run."
-        )
-
-        raise
-
+    except Exception:
+        print("\n[SEND FAILED] Nothing was advanced in state.json; the "
+              "next scheduled run will retry this same question.")
+        traceback.print_exc()
+        return 1
     finally:
         bot.close()
 
-
-def main():
-    config = load_config()
-
-    send_hour = config["send_hour"]
-    send_minute = config["send_minute"]
-
-    # ---------------------------------------------------------
-    # --once
-    #
-    # Runs exactly one poll immediately and exits.
-    # ---------------------------------------------------------
-    if "--once" in sys.argv:
-        run_once()
-        return
-
-    # ---------------------------------------------------------
-    # Daily scheduler mode
-    # ---------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("WHATSAPP DAILY POLL BOT")
-    print("=" * 60)
-
-    print(
-        f"\nDaily schedule: "
-        f"{send_hour:02d}:{send_minute:02d}"
+    # Only reached if every step above succeeded.
+    new_index = state.next_question_index + 1
+    mark_sent(
+        STATE_PATH,
+        state,
+        question=question_text,
+        answer=correct_answer,
+        new_next_index=new_index,
+        total_questions=total,
     )
 
-    print("Scheduler is running...")
-    print("Press Ctrl+C to stop the bot.")
+    print(f"\nstate.json updated: next_question_index = {new_index} of {total}.")
+    if new_index >= total:
+        print("All questions have been completed.")
 
+    return 0
+
+
+def run_forever(config: dict) -> None:
     while True:
+        exit_code = run_once()
+        # Re-read config each cycle in case send_hour/send_minute changed.
         try:
-            # -------------------------------------------------
-            # Wait until the next scheduled time
-            # -------------------------------------------------
-            wait_until_next_run(
-                send_hour,
-                send_minute
-            )
+            config = load_config(CONFIG_PATH)
+        except Exception as e:
+            print(f"[CONFIG ERROR] {e}")
+            print("Retrying with previous schedule in 5 minutes...")
+            import time
+            time.sleep(300)
+            continue
 
-            # -------------------------------------------------
-            # Execute one complete poll cycle
-            # -------------------------------------------------
-            run_once()
+        # If everything is completed, stop looping entirely rather than
+        # waking up forever to do nothing.
+        try:
+            state = load_state(STATE_PATH)
+            questions = parse_questions(QUESTIONS_PATH)
+            if state.completed or state.next_question_index >= len(questions):
+                print("All questions have been completed. Exiting.")
+                return
+        except Exception:
+            pass
 
-        except KeyboardInterrupt:
-            print("\n\nBot stopped by user.")
-            break
+        scheduler.wait_until_next_run(config["send_hour"], config["send_minute"])
 
-        except Exception as error:
-            print("\n" + "=" * 60)
-            print("❌ DAILY RUN FAILED")
-            print("=" * 60)
 
-            print(f"\nError: {error}")
+def main() -> None:
+    parser_ = argparse.ArgumentParser(description="Hare Krishna Daily Quiz Bot")
+    parser_.add_argument(
+        "--once",
+        action="store_true",
+        help="Run exactly one quiz cycle immediately, then exit.",
+    )
+    args = parser_.parse_args()
 
-            print(
-                "\nThe question was not marked as sent."
-                "\nThe bot will continue waiting for the next scheduled run."
-            )
+    if args.once:
+        sys.exit(run_once())
 
-            # Give the process a short recovery period
-            time.sleep(30)
+    config = load_config(CONFIG_PATH)
+    run_forever(config)
 
 
 if __name__ == "__main__":
